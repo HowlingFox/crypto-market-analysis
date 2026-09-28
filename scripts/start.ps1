@@ -5,7 +5,7 @@ param(
 )
 
 $python = 'D:\Python\Python314\python.exe'
-$script = 'L:\Skill\BTC-Trade-Skill\scripts\run_and_send_telegram.py'
+$script = 'L:\Skill\crypto-market-analysis\scripts\run_and_send_telegram.py'
 $symbolToScan = $Symbol.ToUpperInvariant()
 
 $env:TELEGRAM_BOT_TOKEN = [Environment]::GetEnvironmentVariable('TELEGRAM_BOT_TOKEN', 'Machine')

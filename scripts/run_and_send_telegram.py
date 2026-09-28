@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
+import time
 import sys
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
@@ -112,7 +114,7 @@ def convert_update_time_utc8(report: str) -> str:
     return "\n".join(lines)
 
 
-def send_message(token: str, chat_id: str, text: str) -> None:
+def send_message(token: str, chat_id: str, text: str) -> tuple[str, int]:
     if len(text) > TELEGRAM_TEXT_LIMIT:
         raise ValueError(
             f"Report is {len(text)} characters; Telegram allows at most "
@@ -143,6 +145,83 @@ def send_message(token: str, chat_id: str, text: str) -> None:
     if not result.get("ok"):
         raise RuntimeError("Telegram rejected the message; check bot access and chat ID.")
 
+    message = result.get("result") or {}
+    message_id = message.get("message_id")
+    sent_chat_id = (message.get("chat") or {}).get("id", chat_id)
+    if message_id is None:
+        raise RuntimeError("Telegram accepted the message but returned no message ID.")
+    return str(sent_chat_id), int(message_id)
+
+
+def delete_message(token: str, chat_id: str, message_id: int) -> None:
+    url = f"{TELEGRAM_API}/bot{token}/deleteMessage"
+    body = json.dumps({"chat_id": chat_id, "message_id": message_id}).encode("utf-8")
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise RuntimeError(f"Telegram API returned HTTP {exc.code} while deleting the message.") from None
+    except URLError:
+        raise RuntimeError("Could not reach the Telegram Bot API to delete the message.") from None
+    except Exception:
+        raise RuntimeError("Telegram message deletion failed.") from None
+
+    if not result.get("ok"):
+        raise RuntimeError("Telegram rejected the message deletion; check bot permissions.")
+
+
+def schedule_message_deletion(chat_id: str, message_id: int) -> None:
+    command = [
+        sys.executable,
+        os.path.abspath(__file__),
+        "--delete-chat-id",
+        chat_id,
+        "--delete-message-id",
+        str(message_id),
+    ]
+    if os.name == "nt":
+        detached = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        new_process_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+        creationflags = detached | new_process_group
+        log_path = os.path.join(os.environ.get("TEMP", os.getcwd()), "telegram_message_deletion.log")
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            try:
+                subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    creationflags=creationflags | breakaway,
+                    close_fds=True,
+                )
+            except OSError:
+                subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    creationflags=creationflags,
+                    close_fds=True,
+                )
+    else:
+        log_path = os.path.join(os.environ.get("TMPDIR", "/tmp"), "telegram_message_deletion.log")
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -151,9 +230,24 @@ def main() -> int:
     parser.add_argument("--symbol", default="BTCUSDT")
     parser.add_argument("--kline-limit", type=int, default=100)
     parser.add_argument("--market-limit", type=int, default=96)
+    parser.add_argument("--delete-chat-id", help=argparse.SUPPRESS)
+    parser.add_argument("--delete-message-id", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if args.delete_message_id is not None:
+        if not token or not args.delete_chat_id:
+            print("Missing Telegram credentials or deletion target.", file=sys.stderr)
+            return 2
+        time.sleep(60 * 60)
+        try:
+            delete_message(token, args.delete_chat_id, args.delete_message_id)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"Deleted Telegram message {args.delete_message_id} after 1 hour.")
+        return 0
+
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
         print(
@@ -173,12 +267,13 @@ def main() -> int:
         report = convert_update_time_utc8(report)
         report = translate_report_sections(report)
         report = set_report_symbol(report, args.symbol)
-        send_message(token, chat_id, report)
+        sent_chat_id, message_id = send_message(token, chat_id, report)
+        schedule_message_deletion(sent_chat_id, message_id)
     except (OSError, ValueError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
-    print(f"Posted {args.symbol.upper()} scan to Telegram.")
+    print(f"Posted {args.symbol.upper()} scan to Telegram; scheduled deletion in 1 hour.")
     return 0
 
 
