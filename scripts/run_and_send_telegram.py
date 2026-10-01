@@ -251,7 +251,7 @@ def main() -> int:
             print("Missing Telegram credentials or deletion target.", file=sys.stderr)
             return 2
         log_execution(f"Deletion worker started; message_id={args.delete_message_id}; waiting 1 hour")
-        time.sleep(60 * 60)
+        time.sleep(60 * 240)
         try:
             delete_message(token, args.delete_chat_id, args.delete_message_id)
         except (OSError, ValueError, RuntimeError) as exc:
