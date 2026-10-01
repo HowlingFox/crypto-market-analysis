@@ -42,6 +42,7 @@ BTC 市场结构预警
 - Funding：<current, z-score/percentile if available, 1d/2d cost>
 - Long/Short：<summary>
 - Basis/Premium：<summary>
+- 技术指标：15m/1h/4h 分列 KDJ、RSI6/12/24、AR、BR、WMSR、CCI、OSC 数值及超买超卖提醒；按已收盘K线计算。
 
 关键位置：
 - 支撑：<support>

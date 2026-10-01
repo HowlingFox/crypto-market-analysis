@@ -23,6 +23,20 @@ else:
 
 TELEGRAM_API = "https://api.telegram.org"
 TELEGRAM_TEXT_LIMIT = 4096
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOG_PATH = os.path.join(PROJECT_ROOT, "logs", "telegram_execution.log")
+
+
+def log_execution(message: str) -> None:
+    timestamp = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S UTC+8")
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, "a", encoding="utf-8") as log_file:
+            log_file.write(f"[{timestamp}] {message}\n")
+    except OSError as exc:
+        print(f"Could not write execution log: {exc}", file=sys.stderr)
+
+
 
 SIGNAL_ZH = {
     "core market data is incomplete": "核心市场数据不完整",
@@ -190,37 +204,33 @@ def schedule_message_deletion(chat_id: str, message_id: int) -> None:
         new_process_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
         breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
         creationflags = detached | new_process_group
-        log_path = os.path.join(os.environ.get("TEMP", os.getcwd()), "telegram_message_deletion.log")
-        with open(log_path, "a", encoding="utf-8") as log_file:
-            try:
-                subprocess.Popen(
-                    command,
-                    stdin=subprocess.DEVNULL,
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    creationflags=creationflags | breakaway,
-                    close_fds=True,
-                )
-            except OSError:
-                subprocess.Popen(
-                    command,
-                    stdin=subprocess.DEVNULL,
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    creationflags=creationflags,
-                    close_fds=True,
-                )
-    else:
-        log_path = os.path.join(os.environ.get("TMPDIR", "/tmp"), "telegram_message_deletion.log")
-        with open(log_path, "a", encoding="utf-8") as log_file:
+        try:
             subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags | breakaway,
                 close_fds=True,
             )
+        except OSError:
+            subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+                close_fds=True,
+            )
+    else:
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
 
 
 def main() -> int:
@@ -228,7 +238,7 @@ def main() -> int:
         description="Scan Binance USD-M Futures and post the report to Telegram."
     )
     parser.add_argument("--symbol", default="BTCUSDT")
-    parser.add_argument("--kline-limit", type=int, default=100)
+    parser.add_argument("--kline-limit", type=int, default=1000)
     parser.add_argument("--market-limit", type=int, default=96)
     parser.add_argument("--delete-chat-id", help=argparse.SUPPRESS)
     parser.add_argument("--delete-message-id", type=int, help=argparse.SUPPRESS)
@@ -237,25 +247,31 @@ def main() -> int:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if args.delete_message_id is not None:
         if not token or not args.delete_chat_id:
+            log_execution(f"Deletion worker aborted: credentials or target missing; message_id={args.delete_message_id}")
             print("Missing Telegram credentials or deletion target.", file=sys.stderr)
             return 2
+        log_execution(f"Deletion worker started; message_id={args.delete_message_id}; waiting 1 hour")
         time.sleep(60 * 60)
         try:
             delete_message(token, args.delete_chat_id, args.delete_message_id)
         except (OSError, ValueError, RuntimeError) as exc:
+            log_execution(f"Message deletion failed; message_id={args.delete_message_id}; error={exc}")
             print(str(exc), file=sys.stderr)
             return 1
+        log_execution(f"Message deleted; message_id={args.delete_message_id}")
         print(f"Deleted Telegram message {args.delete_message_id} after 1 hour.")
         return 0
 
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
+        log_execution(f"Scan aborted: Telegram credentials missing; symbol={args.symbol.upper()}")
         print(
             "Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID environment variable.",
             file=sys.stderr,
         )
         return 2
 
+    log_execution(f"Scan started; symbol={args.symbol.upper()}")
     try:
         bundle = fetch_bundle(
             args.symbol.upper(),
@@ -269,7 +285,9 @@ def main() -> int:
         report = set_report_symbol(report, args.symbol)
         sent_chat_id, message_id = send_message(token, chat_id, report)
         schedule_message_deletion(sent_chat_id, message_id)
+        log_execution(f"Telegram push succeeded; symbol={args.symbol.upper()}; message_id={message_id}; deletion scheduled in 1 hour")
     except (OSError, ValueError, RuntimeError) as exc:
+        log_execution(f"Scan or push failed; symbol={args.symbol.upper()}; error={exc}")
         print(str(exc), file=sys.stderr)
         return 1
 

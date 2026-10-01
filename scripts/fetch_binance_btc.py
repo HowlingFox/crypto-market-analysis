@@ -95,7 +95,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch BTCUSDT public Binance futures market data")
     parser.add_argument("--symbol", default="BTCUSDT")
     parser.add_argument("--base-url", default=BASE_URL)
-    parser.add_argument("--kline-limit", type=int, default=100)
+    parser.add_argument("--kline-limit", type=int, default=1000)
     parser.add_argument("--market-limit", type=int, default=96)
     parser.add_argument("--out", required=True, help="output JSON path")
     args = parser.parse_args()

@@ -119,6 +119,130 @@ def kline_metrics(rows: List[Dict[str, float]]) -> Dict[str, Any]:
     }
 
 
+
+def closed_kline_rows(rows: List[Dict[str, float]]) -> List[Dict[str, float]]:
+    """Exclude the still-forming last candle so oscillator alerts do not flicker."""
+    now_ms = datetime.now().timestamp() * 1000
+    if rows and rows[-1].get("close_time", 0) >= now_ms:
+        return rows[:-1]
+    return rows
+
+
+def rsi_value(closes: List[float], period: int) -> Number:
+    if len(closes) <= period:
+        return None
+    changes = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [max(change, 0.0) for change in changes]
+    losses = [max(-change, 0.0) for change in changes]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for gain, loss in zip(gains[period:], losses[period:]):
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+    return 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+
+
+def technical_indicators(rows: List[Dict[str, float]]) -> Dict[str, Any]:
+    bars = closed_kline_rows(rows)
+    if not bars:
+        return {"available": False}
+    highs = [bar["high"] for bar in bars]
+    lows = [bar["low"] for bar in bars]
+    opens = [bar["open"] for bar in bars]
+    closes = [bar["close"] for bar in bars]
+    out: Dict[str, Any] = {"available": True, "closed_candles": len(bars)}
+
+    # KDJ(9,3,3), using the common recursive 1/3 smoothing and neutral seed 50.
+    if len(bars) >= 9:
+        k = d = 50.0
+        for i in range(8, len(bars)):
+            hh, ll = max(highs[i - 8:i + 1]), min(lows[i - 8:i + 1])
+            rsv = (closes[i] - ll) / (hh - ll) * 100 if hh != ll else 50.0
+            k = (2 * k + rsv) / 3
+            d = (2 * d + k) / 3
+        out["kdj"] = {"k": k, "d": d, "j": 3 * k - 2 * d,
+                      "alert": "超买" if k >= 80 and d >= 80 else "超卖" if k <= 20 and d <= 20 else "中性"}
+    else:
+        out["kdj"] = None
+
+    out["rsi"] = {str(period): rsi_value(closes, period) for period in (6, 12, 24)}
+
+    period = 26
+    if len(bars) >= period + 1:
+        window = bars[-period:]
+        ar_up = sum(bar["high"] - bar["open"] for bar in window)
+        ar_down = sum(bar["open"] - bar["low"] for bar in window)
+        ar = ar_up / ar_down * 100 if ar_down else None
+        br_up = sum(max(bar["high"] - bars[i - 1]["close"], 0.0)
+                    for i, bar in enumerate(bars[-period:], start=len(bars) - period))
+        br_down = sum(max(bars[i - 1]["close"] - bar["low"], 0.0)
+                      for i, bar in enumerate(bars[-period:], start=len(bars) - period))
+        br = br_up / br_down * 100 if br_down else None
+        out["ar"] = ar
+        out["br"] = br
+    else:
+        out["ar"] = out["br"] = None
+
+    period = 14
+    if len(bars) >= period:
+        hh, ll = max(highs[-period:]), min(lows[-period:])
+        out["wmsr"] = (closes[-1] - hh) / (hh - ll) * 100 if hh != ll else -50.0
+    else:
+        out["wmsr"] = None
+
+    period = 20
+    if len(bars) >= period:
+        typical = [(bar["high"] + bar["low"] + bar["close"]) / 3 for bar in bars[-period:]]
+        mean_tp = statistics.mean(typical)
+        mean_deviation = statistics.mean(abs(value - mean_tp) for value in typical)
+        out["cci"] = (typical[-1] - mean_tp) / (0.015 * mean_deviation) if mean_deviation else 0.0
+    else:
+        out["cci"] = None
+
+    if len(closes) >= 14:
+        fast, slow = statistics.mean(closes[-7:]), statistics.mean(closes[-14:])
+        out["osc_pct"] = (fast - slow) / slow * 100 if slow else None
+    else:
+        out["osc_pct"] = None
+    return out
+
+
+def indicator_alerts(indicator: Dict[str, Any]) -> List[str]:
+    if not indicator.get("available"):
+        return []
+    alerts: List[str] = []
+    for period, value in indicator.get("rsi", {}).items():
+        if value is not None and value >= 70:
+            alerts.append(f"RSI{period}超买")
+        elif value is not None and value <= 30:
+            alerts.append(f"RSI{period}超卖")
+    for key, upper, lower, name in (("ar", 150, 50, "AR"), ("br", 400, 50, "BR")):
+        value = indicator.get(key)
+        if value is not None and value >= upper:
+            alerts.append(f"{name}超买")
+        elif value is not None and value <= lower:
+            alerts.append(f"{name}超卖")
+    value = indicator.get("wmsr")
+    if value is not None and value >= -20:
+        alerts.append("WMSR超买")
+    elif value is not None and value <= -80:
+        alerts.append("WMSR超卖")
+    value = indicator.get("cci")
+    if value is not None and value >= 100:
+        alerts.append("CCI超买")
+    elif value is not None and value <= -100:
+        alerts.append("CCI超卖")
+    kdj = indicator.get("kdj")
+    if kdj and kdj["alert"] != "中性":
+        alerts.append(f"KDJ{kdj['alert']}")
+    return alerts
+
+
+def fmt_indicator(value: Number, digits: int = 2) -> str:
+    return "n/a" if value is None else f"{value:.{digits}f}"
+
 def latest_list_item(raw: Any) -> Optional[Dict[str, Any]]:
     if isinstance(raw, list) and raw:
         item = raw[-1]
@@ -355,7 +479,9 @@ def classify(km: Dict[str, Any], oi: Dict[str, Any], taker: Dict[str, Any], fund
 
 
 def analyze(bundle: Dict[str, Any]) -> Dict[str, Any]:
-    klines = {period: kline_metrics(parse_klines(get_data(resp))) for period, resp in bundle.get("klines", {}).items()}
+    parsed_klines = {period: parse_klines(get_data(resp)) for period, resp in bundle.get("klines", {}).items()}
+    klines = {period: kline_metrics(rows) for period, rows in parsed_klines.items()}
+    indicators = {period: technical_indicators(rows) for period, rows in parsed_klines.items()}
     funding = funding_metrics(bundle)
     oi = oi_metrics(bundle)
     taker = taker_metrics(bundle)
@@ -394,6 +520,7 @@ def analyze(bundle: Dict[str, Any]) -> Dict[str, Any]:
         "support": support,
         "resistance": resistance,
         "klines": klines,
+        "indicators": indicators,
         "funding": funding,
         "open_interest": oi,
         "taker_flow": taker,
@@ -459,6 +586,29 @@ def render_markdown(result: Dict[str, Any]) -> str:
         f"- Funding：8h {fmt_pct(funding.get('current_8h_pct'), 4)}，APR {fmt_pct(funding.get('apr_pct'))}，Z {fmt_num(funding.get('z_recent'), 2)}，1天成本 {fmt_pct(funding.get('expected_1d_cost_pct'), 4)}，2天成本 {fmt_pct(funding.get('expected_2d_cost_pct'), 4)}",
         f"- Basis/Premium：{fmt_num(funding.get('basis_bps'), 2)} bps",
         "",
+        "技术指标（已收盘K线；超买超卖为提醒，不是反转确认）：",
+    ]
+    for period in ("15m", "1h", "4h"):
+        ind = result.get("indicators", {}).get(period, {})
+        if not ind.get("available"):
+            lines.append(f"- {period}：数据不足")
+            continue
+        kdj = ind.get("kdj")
+        kdj_text = f"KDJ K/D/J {fmt_indicator(kdj['k'])}/{fmt_indicator(kdj['d'])}/{fmt_indicator(kdj['j'])}" if kdj else "KDJ n/a"
+        rsi = ind.get("rsi", {})
+        rsi_text = "/".join(fmt_indicator(rsi.get(str(length))) for length in (6, 12, 24))
+        ar, br = ind.get("ar"), ind.get("br")
+        ar_text = f"AR {fmt_indicator(ar)}" if ar is not None else "AR n/a"
+        br_text = f"BR {fmt_indicator(br)}" if br is not None else "BR n/a"
+        wr, cci, osc = ind.get("wmsr"), ind.get("cci"), ind.get("osc_pct")
+        wr_text = f"WMSR {fmt_indicator(wr)}" if wr is not None else "WMSR n/a"
+        cci_text = f"CCI {fmt_indicator(cci)}" if cci is not None else "CCI n/a"
+        osc_text = (f"OSC(7,14) {fmt_indicator(osc, 3)}%({'偏强' if osc > 0 else '偏弱' if osc < 0 else '零轴'})" if osc is not None else "OSC n/a")
+        flags = indicator_alerts(ind)
+        alert_text = "；提醒：" + "、".join(flags) if flags else "；无超买超卖提醒"
+        lines.append(f"- {period}：{kdj_text}；RSI6/12/24 {rsi_text}；{ar_text}；{br_text}；{wr_text}；{cci_text}；{osc_text}{alert_text}")
+    lines += [
+        "",
         "关键位置：",
         f"- 支撑：{fmt_num(result.get('support'), 2)}",
         f"- 压力：{fmt_num(result.get('resistance'), 2)}",
@@ -471,7 +621,7 @@ def render_markdown(result: Dict[str, Any]) -> str:
         "",
         f"建议动作：{result['action']}",
         "",
-        "注意：这不是直接买卖指令；如需开仓，必须再做止损、仓位和单日风险检查。",
+        "注意：这不是直接买卖指令；如需开仓，必须再做止损、仓位和单日风险检查。(此消息1小时后自动删除)",
         "",
         "===============================",
         "如需了解机器人并获取更多指标，欢迎咨询：@win88888888888888",

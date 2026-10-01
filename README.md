@@ -58,7 +58,7 @@ $env:PYTHONIOENCODING = 'utf-8'
 
 ```text
 --symbol BTCUSDT       交易对；省略时默认 BTCUSDT
---kline-limit 100      每个周期抓取的 K 线数量；默认 100
+--kline-limit 1000    每个周期抓取的 K 线数量；默认 1000，Binance 上限 1500
 --market-limit 96      衍生品统计接口的历史记录数；默认 96
 ```
 

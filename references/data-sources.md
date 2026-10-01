@@ -42,7 +42,7 @@ Timeframes:
 
 Default limits:
 
-- Klines: 100 candles per timeframe
+- Klines: 1000 candles per timeframe by default (Binance USDⓈ-M endpoint maximum: 1500)
 - OI history: 96 records where available
 - Taker flow: 96 records where available
 - Long/short ratio: 96 records where available
@@ -61,3 +61,5 @@ If funding is missing, say: `missing funding overcrowding check`.
 If taker flow is missing, say: `missing active buy/sell flow confirmation`.
 
 If three or more of OI, funding, taker flow, long/short ratio, and basis are missing, classify as `data_insufficient`.
+
+Technical indicator values are calculated locally from public exchange OHLCV candles because these market-data endpoints return candles, not ready-made KDJ/RSI/AR/BR/WMSR/CCI/OSC values. Fetching 1000 bars gives recursive RSI/KDJ calculations a longer warm-up history; finite-window indicators still use their documented lookback lengths.

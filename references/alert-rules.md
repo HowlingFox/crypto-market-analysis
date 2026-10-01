@@ -144,3 +144,20 @@ If the state is medium/high but data completeness is poor, downgrade one level.
 If 4h and 1h conflict, avoid high-confidence directional wording.
 
 If the result suggests a trade but risk-filter conditions are not satisfied, final action becomes `wait for confirmation` or `run pre-trade checklist`.
+
+
+## Technical Oscillators (15m / 1h / 4h)
+
+The scan prints values from the latest **closed** candle on each timeframe. If a required lookback is unavailable, print `n/a`; do not infer a value. These are context alerts and do not independently indicate a reversal or authorize a trade.
+
+| Indicator | Default calculation | Alert thresholds |
+|---|---|---|
+| KDJ | (9,3,3); RSV from 9-bar high/low range; K and D recursively smoothed by 1/3 with initial values 50; J = 3K - 2D | K and D both >=80: overbought; both <=20: oversold |
+| RSI | Wilder-smoothed RSI, periods 6, 12, 24 | >=70 overbought; <=30 oversold |
+| AR | 26-bar sum(High-Open) / sum(Open-Low) * 100 | >=150 overbought; <=50 oversold |
+| BR | 26-bar sum(max(High-PrevClose,0)) / sum(max(PrevClose-Low,0)) * 100 | >=400 overbought; <=50 oversold |
+| WMSR | 14-bar (Close - HighestHigh) / (HighestHigh - LowestLow) * 100; range -100..0 | >=-20 overbought; <=-80 oversold |
+| CCI | 20-bar Typical Price, mean deviation and Lambert constant 0.015 | >=100 overbought; <=-100 oversold |
+| OSC | (SMA(Close,7) - SMA(Close,14)) / SMA(Close,14) * 100 | Zero-line context only: positive means fast average above slow average, negative means below; no universal fixed overbought/oversold threshold |
+
+All thresholds are conventional reference levels and may persist during strong trends. Displaying a threshold alert must not promote the overall structural alert level or override the risk filter by itself.
