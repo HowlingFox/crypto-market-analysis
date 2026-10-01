@@ -50,7 +50,7 @@ if (-not $env:TELEGRAM_BOT_TOKEN -or -not $env:TELEGRAM_CHAT_ID) {
 }
 $env:PYTHONIOENCODING = 'utf-8'
 & 'D:\Python\Python314\python.exe' `
-  'L:\Skill\BTC-Trade-Skill\scripts\run_and_send_telegram.py' `
+  'L:\Skill\crypto-market-analysis\scripts\run_and_send_telegram.py' `
   --symbol BTCUSDT
 ```
 
@@ -66,7 +66,7 @@ $env:PYTHONIOENCODING = 'utf-8'
 
 ```powershell
 & 'D:\Python\Python314\python.exe' `
-  'L:\Skill\BTC-Trade-Skill\scripts\run_and_send_telegram.py' `
+  'L:\Skill\crypto-market-analysis\scripts\run_and_send_telegram.py' `
   --symbol ETHUSDT
 ```
 
@@ -74,14 +74,14 @@ $env:PYTHONIOENCODING = 'utf-8'
 
 ```powershell
 & 'D:\Python\Python314\python.exe' `
-  'L:\Skill\BTC-Trade-Skill\scripts\fetch_binance_btc.py' `
+  'L:\Skill\crypto-market-analysis\scripts\fetch_binance_btc.py' `
   --symbol BTCUSDT `
-  --out 'L:\Skill\BTC-Trade-Skill\btc_market.json'
+  --out 'L:\Skill\crypto-market-analysis\btc_market.json'
 
 $env:PYTHONIOENCODING = 'utf-8'
 & 'D:\Python\Python314\python.exe' `
-  'L:\Skill\BTC-Trade-Skill\scripts\analyze_btc_structure.py' `
-  --input 'L:\Skill\BTC-Trade-Skill\btc_market.json' `
+  'L:\Skill\crypto-market-analysis\scripts\analyze_btc_structure.py' `
+  --input 'L:\Skill\crypto-market-analysis\btc_market.json' `
   --format markdown
 ```
 
@@ -106,7 +106,7 @@ flowchart TD
 1. PowerShell 把系统作用域中的 Telegram 参数装入当前进程环境；Python 脚本本身只读取进程环境。
 2. 推送脚本检查两个变量是否存在。缺少任一变量时返回退出码 `2`，不启动抓取和推送。
 3. 抓取器读取 15m、1h、4h K 线、当前未平仓量、未平仓量历史、主动买卖比、多空账户/持仓比、资金费率历史及标记价/指数价等数据。
-4. 分析器计算涨跌幅、成交量比、支撑/压力、持仓量变化、资金费率分位与 Z 分数、主动买卖比等指标，并生成结构分类和风险提示。
+4. 分析器计算涨跌幅、成交量比、支撑/压力、持仓量变化、资金费率分位与 Z 分数、主动买卖比等指标；并以已收盘 K 线计算 KDJ、RSI(6/12/24)、AR、BR、WMSR、CCI、OSC，生成结构分类和风险提示。
 5. Telegram 包装脚本只调整报告的三个部分：更新时间转 UTC+8、将“触发信号”和“风险判断”条目翻译为中文、把标题交易对替换为本次 `--symbol`。其他报告内容保持分析器原样。
 6. 推送脚本通过 Telegram Bot API 发送文本消息，关闭网页预览；单条消息超过 4096 字符会报错。
 
@@ -114,12 +114,15 @@ flowchart TD
 
 ### 数据和指标
 
-- K 线周期：15m、1h、4h；每个周期默认最多抓取 100 根。
+- K 线周期：15m、1h、4h；每个周期默认抓取 1000 根，Binance USDⓈ-M K 线接口单次上限为 1500 根。
 - K 线统计要求至少 25 根；以最新价格和此前约 20 个周期计算 20 周期涨跌、成交量比及近期高低区间。
 - 交易量比以最新 K 线量除以前 20 根 K 线平均量。
 - 支撑/压力来自可用周期近 20 根 K 线的低点/高点；最终支撑取各周期低点最小值，压力取高点最大值。
 - 资金费率侧计算当前费率、年化估算、近端分位/Z 分数、溢价基差，以及 1 天和 2 天持仓成本估算。
 - 未平仓量、主动买卖比和多空比按 Binance 返回数据计算；部分历史统计接口不可用时，该组会被标为缺失。
+- 技术振荡指标按已收盘 K 线计算，分 15m、1h、4h 展示。KDJ 使用 (9,3,3)；RSI 使用 Wilder 平滑，周期 6/12/24；AR/BR 使用 26 根；WMSR 使用 14 根；CCI 使用 20 根；OSC 使用 7/14 均线差并按慢均线归一化为百分比。
+- 默认提醒参考值：KDJ 的 K、D 同时达到 80/20；RSI 达到 70/30；AR 达到 150/50；BR 达到 400/50；WMSR 达到 -20/-80；CCI 达到 100/-100。OSC 只标记相对零轴偏强/偏弱，不设置固定超买超卖线。
+- 指标提示不单独抬高结构预警等级，也不代表价格必然反转；公式和阈值详见 `references/alert-rules.md`。
 
 ### 关键阈值
 
@@ -162,10 +165,23 @@ flowchart TD
 - “触发信号”和“风险判断”内的条目由推送层转换为中文；其余字段、结构标签和指标名称保持原模板内容。
 - 数据更新时间在推送前按 UTC+8 转换，并显示 `UTC+8`。
 - 数据来源字段由分析报告提供，通常为 `Binance public API`。
+- 技术指标按周期分块；每个周期分别列出动能、摆动、情绪和提醒：
+
+```text
+技术指标（已收盘K线；超买超卖为提醒，不是反转确认）
+
+15m
+动能：KDJ K/D/J <数值>
+      RSI 6/12/24：<数值>
+摆动：WMSR <数值>｜CCI <数值>｜OSC(7,14) <数值>%（偏强/偏弱/零轴）
+情绪：AR <数值>｜BR <数值>
+提醒：<指标超买/超卖提示；没有时显示“无”>
+```
+
 
 ## 9. 定时任务
 
-当前计划任务名为 `BTCUSDT-Telegram-Market-Analysis`，默认使用 `BTCUSDT`，每 4 小时运行一次；仅在 `CA19002\lujie` 用户登录时运行，错过时间后可在登录时补跑一次，若上次扫描仍运行则忽略新实例。任务通过 PowerShell 启动 Python 推送脚本，工作目录为 `L:\Skill\BTC-Trade-Skill`。
+当前计划任务名为 `BTCUSDT-Telegram-Market-Analysis`，默认使用 `BTCUSDT`，每 4 小时运行一次；仅在 `CA19002\lujie` 用户登录时运行，错过时间后可在登录时补跑一次，若上次扫描仍运行则忽略新实例。任务通过 PowerShell 启动 Python 推送脚本，工作目录为 `L:\Skill\crypto-market-analysis`。
 
 计划任务重复触发持续时间设置为 3650 天；该时段结束后需重新注册/更新任务。查看任务状态：
 

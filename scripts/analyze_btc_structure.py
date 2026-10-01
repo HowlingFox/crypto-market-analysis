@@ -590,23 +590,38 @@ def render_markdown(result: Dict[str, Any]) -> str:
     ]
     for period in ("15m", "1h", "4h"):
         ind = result.get("indicators", {}).get(period, {})
+        lines.append("")
+        lines.append(period)
         if not ind.get("available"):
-            lines.append(f"- {period}：数据不足")
+            lines.append("数据不足，无法计算指标")
             continue
+
         kdj = ind.get("kdj")
-        kdj_text = f"KDJ K/D/J {fmt_indicator(kdj['k'])}/{fmt_indicator(kdj['d'])}/{fmt_indicator(kdj['j'])}" if kdj else "KDJ n/a"
+        kdj_text = (
+            f"{fmt_indicator(kdj['k'])}/{fmt_indicator(kdj['d'])}/{fmt_indicator(kdj['j'])}"
+            if kdj else "n/a"
+        )
         rsi = ind.get("rsi", {})
         rsi_text = "/".join(fmt_indicator(rsi.get(str(length))) for length in (6, 12, 24))
-        ar, br = ind.get("ar"), ind.get("br")
-        ar_text = f"AR {fmt_indicator(ar)}" if ar is not None else "AR n/a"
-        br_text = f"BR {fmt_indicator(br)}" if br is not None else "BR n/a"
+        lines.append(f"动能：KDJ K/D/J {kdj_text}")
+        lines.append(f"　　　RSI 6/12/24：{rsi_text}")
+
         wr, cci, osc = ind.get("wmsr"), ind.get("cci"), ind.get("osc_pct")
-        wr_text = f"WMSR {fmt_indicator(wr)}" if wr is not None else "WMSR n/a"
-        cci_text = f"CCI {fmt_indicator(cci)}" if cci is not None else "CCI n/a"
-        osc_text = (f"OSC(7,14) {fmt_indicator(osc, 3)}%({'偏强' if osc > 0 else '偏弱' if osc < 0 else '零轴'})" if osc is not None else "OSC n/a")
+        wr_text = fmt_indicator(wr) if wr is not None else "n/a"
+        cci_text = fmt_indicator(cci) if cci is not None else "n/a"
+        if osc is None:
+            osc_text = "n/a"
+        else:
+            osc_state = "偏强" if osc > 0 else "偏弱" if osc < 0 else "零轴"
+            osc_text = f"{fmt_indicator(osc, 3)}%（{osc_state}）"
+        lines.append(f"摆动：WMSR {wr_text}｜CCI {cci_text}｜OSC(7,14) {osc_text}")
+
+        ar, br = ind.get("ar"), ind.get("br")
+        ar_text = fmt_indicator(ar) if ar is not None else "n/a"
+        br_text = fmt_indicator(br) if br is not None else "n/a"
+        lines.append(f"情绪：AR {ar_text}｜BR {br_text}")
         flags = indicator_alerts(ind)
-        alert_text = "；提醒：" + "、".join(flags) if flags else "；无超买超卖提醒"
-        lines.append(f"- {period}：{kdj_text}；RSI6/12/24 {rsi_text}；{ar_text}；{br_text}；{wr_text}；{cci_text}；{osc_text}{alert_text}")
+        lines.append("提醒：" + "、".join(flags) if flags else "提醒：无")
     lines += [
         "",
         "关键位置：",
