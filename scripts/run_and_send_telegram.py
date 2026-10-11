@@ -292,7 +292,15 @@ def delete_message(token: str, chat_id: str, message_id: int) -> None:
         raise RuntimeError("Telegram rejected the message deletion; check bot permissions.")
 
 
-def schedule_message_deletion(chat_id: str, message_id: int) -> None:
+def format_duration(seconds: int) -> str:
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600}小时"
+    if seconds % 60 == 0:
+        return f"{seconds // 60}分钟"
+    return f"{seconds}秒"
+
+
+def schedule_message_deletion(chat_id: str, message_id: int, delete_after_seconds: int) -> None:
     command = [
         sys.executable,
         os.path.abspath(__file__),
@@ -300,6 +308,8 @@ def schedule_message_deletion(chat_id: str, message_id: int) -> None:
         chat_id,
         "--delete-message-id",
         str(message_id),
+        "--delete-after-seconds",
+        str(delete_after_seconds),
     ]
     if os.name == "nt":
         detached = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
@@ -344,7 +354,7 @@ def main() -> int:
     parser.add_argument("--market-limit", type=int, default=96)
     parser.add_argument("--delete-chat-id", help=argparse.SUPPRESS)
     parser.add_argument("--delete-message-id", type=int, help=argparse.SUPPRESS)
-    parser.add_argument("--delete-after-seconds", type=int, default=3600, help=argparse.SUPPRESS)
+    parser.add_argument("--delete-after-seconds", type=int, default=7200, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -353,7 +363,8 @@ def main() -> int:
             log_execution(f"Deletion worker aborted: credentials or target missing; message_id={args.delete_message_id}")
             print("Missing Telegram credentials or deletion target.", file=sys.stderr)
             return 2
-        log_execution(f"Deletion worker started; message_id={args.delete_message_id}; waiting 3 hour")
+        duration = format_duration(args.delete_after_seconds)
+        log_execution(f"Deletion worker started; message_id={args.delete_message_id}; waiting {duration}")
         time.sleep(max(0, args.delete_after_seconds))
         try:
             delete_message(token, args.delete_chat_id, args.delete_message_id)
@@ -362,7 +373,7 @@ def main() -> int:
             print(str(exc), file=sys.stderr)
             return 1
         log_execution(f"Message deleted; message_id={args.delete_message_id}")
-        print(f"Deleted Telegram message {args.delete_message_id} after 1 hour.")
+        print(f"Deleted Telegram message {args.delete_message_id} after {duration}.")
         return 0
 
     recipients_value = os.environ.get("TELEGRAM_CHAT_IDS", "").strip()
@@ -394,12 +405,14 @@ def main() -> int:
         report = convert_update_time_utc8(report)
         report = translate_report_sections(report)
         report = set_report_symbol(report, args.symbol)
+        duration = format_duration(args.delete_after_seconds)
+        report = report.replace("此消息1小时后自动删除", f"此消息{duration}后自动删除")
         delivery_errors = []
         for chat_id in chat_ids:
             try:
                 sent_chat_id, message_id = send_message(token, chat_id, report)
-                schedule_message_deletion(sent_chat_id, message_id)
-                log_execution(f"Telegram push succeeded; symbol={args.symbol.upper()}; target={sent_chat_id}; message_id={message_id}; deletion scheduled in 1 hour")
+                schedule_message_deletion(sent_chat_id, message_id, args.delete_after_seconds)
+                log_execution(f"Telegram push succeeded; symbol={args.symbol.upper()}; target={sent_chat_id}; message_id={message_id}; deletion scheduled in {duration}")
             except (OSError, ValueError, RuntimeError) as exc:
                 delivery_errors.append(f"{chat_id}: {exc}")
                 log_execution(f"Telegram push failed; symbol={args.symbol.upper()}; target={chat_id}; error={exc}")
@@ -410,7 +423,7 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    print(f"Posted {args.symbol.upper()} scan to {len(chat_ids)} Telegram target(s); scheduled deletion in 3 hour.")
+    print(f"Posted {args.symbol.upper()} scan to {len(chat_ids)} Telegram target(s); scheduled deletion in {format_duration(args.delete_after_seconds)}.")
     return 0
 
 
