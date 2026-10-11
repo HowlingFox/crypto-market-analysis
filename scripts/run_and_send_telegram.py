@@ -353,7 +353,7 @@ def main() -> int:
             log_execution(f"Deletion worker aborted: credentials or target missing; message_id={args.delete_message_id}")
             print("Missing Telegram credentials or deletion target.", file=sys.stderr)
             return 2
-        log_execution(f"Deletion worker started; message_id={args.delete_message_id}; waiting 1 hour")
+        log_execution(f"Deletion worker started; message_id={args.delete_message_id}; waiting 3 hour")
         time.sleep(max(0, args.delete_after_seconds))
         try:
             delete_message(token, args.delete_chat_id, args.delete_message_id)
@@ -410,7 +410,7 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    print(f"Posted {args.symbol.upper()} scan to {len(chat_ids)} Telegram target(s); scheduled deletion in 1 hour.")
+    print(f"Posted {args.symbol.upper()} scan to {len(chat_ids)} Telegram target(s); scheduled deletion in 3 hour.")
     return 0
 
 
