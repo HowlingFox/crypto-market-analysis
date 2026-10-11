@@ -214,5 +214,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Telegram recipient IDs discovered through getUpdates
+logs/telegram_recipients.json
+logs/telegram_recipients.json.tmp
+
 # Streamlit
 .streamlit/secrets.toml

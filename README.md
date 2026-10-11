@@ -2,7 +2,7 @@
 
 ## 1. 功能概览
 
-程序从 Binance USDⓈ-M Futures 公共 API 读取指定合约的市场数据，计算 15 分钟、1 小时和 4 小时结构指标，生成市场结构报告，并可通过 Telegram Bot 推送。行情读取不需要 Binance API Key；Telegram 推送需要配置 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID`。
+程序从 Binance USDⓈ-M Futures 公共 API 读取指定合约的市场数据，计算 15 分钟、1 小时、4 小时和日线结构指标，并判断日线、4小时、1小时已收盘K线的阴包阳/阳包阴形态。报告可通过 Telegram Bot 同时推送到主动联系机器人的个人用户和 `TELEGRAM_CHAT_IDS` 配置的频道。行情读取不需要 Binance API Key；推送需要 `TELEGRAM_BOT_TOKEN`。
 
 程序只生成风险提示和观察建议，不下单，也不提供必须买入或卖出的指令。
 
@@ -20,12 +20,14 @@
 推送脚本从 Python 进程环境读取以下变量：
 
 - `TELEGRAM_BOT_TOKEN`：Telegram Bot Token。
-- `TELEGRAM_CHAT_ID`：目标频道 ID 或 `@频道用户名`。
+- `TELEGRAM_CHAT_IDS`：可选的固定群组/频道目标，使用英文逗号分隔；频道可使用 `@频道用户名` 或数字 ID。个人用户通过 Bot API `getUpdates` 自动发现，无需手动录入。不要把个人用户名放入此变量。
 
-目前这两个变量配置在 Windows **系统变量**中。不要把变量值写进脚本、任务参数、命令行文本或日志。可以只检查是否可读，不显示值：
+个人用户需先主动给机器人发送消息（如 `/start`），机器人会保存其数字 chat ID，并在后续扫描时推送报告。发送 `/stop` 可退出后续推送。频道需先将机器人加入频道并授予发消息权限。`getUpdates` 与 webhook 不能同时使用；本功能要求机器人没有配置 webhook。发现的私聊 ID 保存在本地 `logs/telegram_recipients.json`，该文件已加入 Git 忽略规则。
+
+这些变量配置在 Windows **系统变量**中。不要把变量值写进脚本、任务参数、命令行文本或日志。可以只检查是否可读，不显示值：
 
 ```powershell
-$names = 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'
+$names = 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_IDS'
 foreach ($name in $names) {
     [pscustomobject]@{
         Name = $name
@@ -44,9 +46,9 @@ foreach ($name in $names) {
 ```powershell
 $ErrorActionPreference = 'Stop'
 $env:TELEGRAM_BOT_TOKEN = [Environment]::GetEnvironmentVariable('TELEGRAM_BOT_TOKEN', 'Machine')
-$env:TELEGRAM_CHAT_ID = [Environment]::GetEnvironmentVariable('TELEGRAM_CHAT_ID', 'Machine')
-if (-not $env:TELEGRAM_BOT_TOKEN -or -not $env:TELEGRAM_CHAT_ID) {
-    throw '系统环境变量 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID 不可读。'
+$env:TELEGRAM_CHAT_IDS = [Environment]::GetEnvironmentVariable('TELEGRAM_CHAT_IDS', 'Machine')
+if (-not $env:TELEGRAM_BOT_TOKEN) {
+    throw '系统环境变量 TELEGRAM_BOT_TOKEN 不可读。'
 }
 $env:PYTHONIOENCODING = 'utf-8'
 & 'D:\Python\Python314\python.exe' `
@@ -104,7 +106,7 @@ flowchart TD
 实际顺序如下：
 
 1. PowerShell 把系统作用域中的 Telegram 参数装入当前进程环境；Python 脚本本身只读取进程环境。
-2. 推送脚本检查两个变量是否存在。缺少任一变量时返回退出码 `2`，不启动抓取和推送。
+2. 推送脚本读取 Bot Token，先通过 `getUpdates` 登记主动联系机器人的私聊用户，再合并 `TELEGRAM_CHAT_IDS` 固定目标。如果最终没有任何目标，返回错误并跳过行情抓取。
 3. 抓取器读取 15m、1h、4h K 线、当前未平仓量、未平仓量历史、主动买卖比、多空账户/持仓比、资金费率历史及标记价/指数价等数据。
 4. 分析器计算涨跌幅、成交量比、支撑/压力、持仓量变化、资金费率分位与 Z 分数、主动买卖比等指标；并以已收盘 K 线计算 KDJ、RSI(6/12/24)、AR、BR、WMSR、CCI、OSC，生成结构分类和风险提示。
 5. Telegram 包装脚本只调整报告的三个部分：更新时间转 UTC+8、将“触发信号”和“风险判断”条目翻译为中文、把标题交易对替换为本次 `--symbol`。其他报告内容保持分析器原样。
@@ -196,6 +198,6 @@ Get-ScheduledTaskInfo -TaskName 'BTCUSDT-Telegram-Market-Analysis'
 | --- | --- |
 | `0` | Telegram API 接受了推送消息。 |
 | `1` | 抓取/报告处理/Telegram 发送过程中发生运行错误，或 Telegram 拒绝消息。 |
-| `2` | 缺少 `TELEGRAM_BOT_TOKEN` 或 `TELEGRAM_CHAT_ID`。 |
+| `2` | 缺少 `TELEGRAM_BOT_TOKEN`。 |
 
 抓取器会把单个 Binance API 失败记录到数据包，不一定中止整个程序；如果关键数据缺失，分析结果会标为数据不足。当前推送脚本没有额外的交易对预检，因此运行前应确认交易对属于 Binance USDⓈ-M Futures。报告不是自动交易信号，也不会发送订单。

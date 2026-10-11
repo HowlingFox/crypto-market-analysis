@@ -50,7 +50,7 @@ def http_get(base_url: str, path: str, params: Dict[str, Any]) -> Dict[str, Any]
 
 
 def fetch_bundle(symbol: str, base_url: str, kline_limit: int, market_limit: int) -> Dict[str, Any]:
-    periods = ["15m", "1h", "4h"]
+    periods = ["15m", "1h", "4h", "1d"]
     fetched_at = datetime.now(timezone.utc)
     bundle: Dict[str, Any] = {
         "meta": {

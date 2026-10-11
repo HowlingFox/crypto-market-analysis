@@ -17,7 +17,7 @@
 | 扫描日志 | `logs/telegram_execution.log` |
 | cron 标准输出/错误 | `logs/cron.log` |
 
-Telegram 消息会在发送后约 1 小时由后台进程尝试删除。请确保机器人在目标频道有发送和删除消息的权限。
+Telegram 消息会在发送后约 1 小时由后台进程尝试删除。个人与频道均可配置为目标；请确保机器人可向每个目标发送消息，频道还需授予发送/删除权限。
 
 ## 2. 软件依赖
 
@@ -63,12 +63,14 @@ install -d -m 700 "$HOME/.config/crypto-market-analysis"
 umask 077
 read -r -s -p 'Telegram Bot Token: ' TELEGRAM_TOKEN
 printf '\n'
-read -r -s -p 'Telegram Chat ID: ' TELEGRAM_CHAT
+read -r -p 'Optional channel/group IDs (comma-separated): ' TELEGRAM_CHATS
 printf '\n'
-printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=%s\n' "$TELEGRAM_TOKEN" "$TELEGRAM_CHAT" > "$HOME/.config/crypto-market-analysis/telegram.env"
+printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_IDS=%s\n' "$TELEGRAM_TOKEN" "$TELEGRAM_CHATS" > "$HOME/.config/crypto-market-analysis/telegram.env"
 chmod 600 "$HOME/.config/crypto-market-analysis/telegram.env"
-unset TELEGRAM_TOKEN TELEGRAM_CHAT
+unset TELEGRAM_TOKEN TELEGRAM_CHATS
 ```
+
+个人用户通过 `getUpdates` 自动登记，无需填写个人用户名。每位用户需先主动给机器人发消息；`TELEGRAM_CHAT_IDS` 仅填写固定频道/群组目标。
 
 只核对文件权限，不要 `cat` 凭据文件：
 

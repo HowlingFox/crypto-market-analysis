@@ -11,6 +11,7 @@ import time
 import sys
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 if __package__:
@@ -25,6 +26,7 @@ TELEGRAM_API = "https://api.telegram.org"
 TELEGRAM_TEXT_LIMIT = 4096
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_PATH = os.path.join(PROJECT_ROOT, "logs", "telegram_execution.log")
+RECIPIENTS_PATH = os.path.join(PROJECT_ROOT, "logs", "telegram_recipients.json")
 
 
 def log_execution(message: str) -> None:
@@ -128,6 +130,106 @@ def convert_update_time_utc8(report: str) -> str:
     return "\n".join(lines)
 
 
+def telegram_api_error(exc: HTTPError) -> str:
+    """Return Telegram's safe error description without exposing the token URL."""
+    try:
+        payload = json.loads(exc.read().decode("utf-8"))
+        description = payload.get("description")
+        if description:
+            return str(description)
+    except Exception:  # noqa: BLE001
+        pass
+    return f"HTTP {exc.code}"
+
+
+def load_recipient_state() -> dict[str, object]:
+    if not os.path.exists(RECIPIENTS_PATH):
+        return {"next_offset": 0, "private_chat_ids": []}
+    with open(RECIPIENTS_PATH, "r", encoding="utf-8") as state_file:
+        state = json.load(state_file)
+    if not isinstance(state, dict):
+        raise ValueError("Telegram recipient state must be a JSON object.")
+    offset = state.get("next_offset", 0)
+    recipients = state.get("private_chat_ids", [])
+    if not isinstance(offset, int) or not isinstance(recipients, list):
+        raise ValueError("Telegram recipient state has an invalid format.")
+    return {"next_offset": offset, "private_chat_ids": [str(chat_id) for chat_id in recipients]}
+
+
+def save_recipient_state(state: dict[str, object]) -> None:
+    os.makedirs(os.path.dirname(RECIPIENTS_PATH), exist_ok=True)
+    temporary_path = RECIPIENTS_PATH + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as state_file:
+        json.dump(state, state_file, ensure_ascii=False, indent=2)
+    os.replace(temporary_path, RECIPIENTS_PATH)
+
+
+def get_updates(token: str, offset: int) -> list[dict[str, object]]:
+    params = {"timeout": 0, "allowed_updates": json.dumps(["message"])}
+    if offset > 0:
+        params["offset"] = offset
+    url = f"{TELEGRAM_API}/bot{token}/getUpdates?{urlencode(params)}"
+    request = Request(url, headers={"User-Agent": "crypto-market-structure-alert/1.0"})
+    try:
+        with urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise RuntimeError(f"Telegram getUpdates failed: {telegram_api_error(exc)}") from None
+    except URLError:
+        raise RuntimeError("Could not reach Telegram getUpdates API.") from None
+    except Exception:  # noqa: BLE001
+        raise RuntimeError("Could not read Telegram updates.") from None
+    if not payload.get("ok"):
+        description = payload.get("description") or "Telegram rejected getUpdates."
+        raise RuntimeError(str(description))
+    result = payload.get("result")
+    if not isinstance(result, list):
+        raise RuntimeError("Telegram getUpdates returned an invalid result.")
+    return result
+
+
+def discover_private_recipients(token: str) -> list[str]:
+    """Persist private chats that have sent the bot a message; /stop opts out."""
+    state = load_recipient_state()
+    offset = int(state["next_offset"])
+    recipients = set(state["private_chat_ids"])
+    initial_recipients = set(recipients)
+    changed = False
+    while True:
+        updates = get_updates(token, offset)
+        if not updates:
+            break
+        for update in updates:
+            if not isinstance(update, dict):
+                continue
+            update_id = update.get("update_id")
+            if isinstance(update_id, int):
+                offset = max(offset, update_id + 1)
+            message = update.get("message")
+            if not isinstance(message, dict):
+                continue
+            chat = message.get("chat")
+            if not isinstance(chat, dict) or chat.get("type") != "private" or chat.get("id") is None:
+                continue
+            sender = message.get("from")
+            if isinstance(sender, dict) and sender.get("is_bot"):
+                continue
+            chat_id = str(chat["id"])
+            text_value = message.get("text", "")
+            command = str(text_value).split(maxsplit=1)[0].split("@", 1)[0].lower() if text_value else ""
+            if command == "/stop":
+                recipients.discard(chat_id)
+            else:
+                recipients.add(chat_id)
+        changed = True
+        save_recipient_state({"next_offset": offset, "private_chat_ids": sorted(recipients)})
+        if len(updates) < 100:
+            break
+    if changed or recipients != initial_recipients:
+        save_recipient_state({"next_offset": offset, "private_chat_ids": sorted(recipients)})
+    return sorted(recipients)
+
+
 def send_message(token: str, chat_id: str, text: str) -> tuple[str, int]:
     if len(text) > TELEGRAM_TEXT_LIMIT:
         raise ValueError(
@@ -150,7 +252,7 @@ def send_message(token: str, chat_id: str, text: str) -> tuple[str, int]:
             result = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         # Do not print the request URL: Telegram bot tokens are part of its path.
-        raise RuntimeError(f"Telegram API returned HTTP {exc.code}.") from None
+        raise RuntimeError(f"Telegram API error: {telegram_api_error(exc)}") from None
     except URLError:
         raise RuntimeError("Could not reach the Telegram Bot API.") from None
     except Exception:
@@ -242,6 +344,7 @@ def main() -> int:
     parser.add_argument("--market-limit", type=int, default=96)
     parser.add_argument("--delete-chat-id", help=argparse.SUPPRESS)
     parser.add_argument("--delete-message-id", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--delete-after-seconds", type=int, default=3600, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -251,7 +354,7 @@ def main() -> int:
             print("Missing Telegram credentials or deletion target.", file=sys.stderr)
             return 2
         log_execution(f"Deletion worker started; message_id={args.delete_message_id}; waiting 1 hour")
-        time.sleep(60 * 240)
+        time.sleep(max(0, args.delete_after_seconds))
         try:
             delete_message(token, args.delete_chat_id, args.delete_message_id)
         except (OSError, ValueError, RuntimeError) as exc:
@@ -262,17 +365,25 @@ def main() -> int:
         print(f"Deleted Telegram message {args.delete_message_id} after 1 hour.")
         return 0
 
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat_id:
+    recipients_value = os.environ.get("TELEGRAM_CHAT_IDS", "").strip()
+    chat_ids = list(dict.fromkeys(value.strip() for value in recipients_value.replace(";", ",").split(",") if value.strip()))
+    if not token:
         log_execution(f"Scan aborted: Telegram credentials missing; symbol={args.symbol.upper()}")
         print(
-            "Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID environment variable.",
+            "Missing TELEGRAM_BOT_TOKEN environment variable.",
             file=sys.stderr,
         )
         return 2
 
     log_execution(f"Scan started; symbol={args.symbol.upper()}")
     try:
+        private_chat_ids = discover_private_recipients(token)
+        chat_ids = list(dict.fromkeys(private_chat_ids + chat_ids))
+        if not chat_ids:
+            raise RuntimeError(
+                "No Telegram recipients found. Send the bot a message first, or set TELEGRAM_CHAT_IDS for channels."
+            )
+        log_execution(f"Telegram recipients ready; private_users={len(private_chat_ids)}; total_targets={len(chat_ids)}")
         bundle = fetch_bundle(
             args.symbol.upper(),
             "https://fapi.binance.com",
@@ -283,15 +394,23 @@ def main() -> int:
         report = convert_update_time_utc8(report)
         report = translate_report_sections(report)
         report = set_report_symbol(report, args.symbol)
-        sent_chat_id, message_id = send_message(token, chat_id, report)
-        schedule_message_deletion(sent_chat_id, message_id)
-        log_execution(f"Telegram push succeeded; symbol={args.symbol.upper()}; message_id={message_id}; deletion scheduled in 1 hour")
+        delivery_errors = []
+        for chat_id in chat_ids:
+            try:
+                sent_chat_id, message_id = send_message(token, chat_id, report)
+                schedule_message_deletion(sent_chat_id, message_id)
+                log_execution(f"Telegram push succeeded; symbol={args.symbol.upper()}; target={sent_chat_id}; message_id={message_id}; deletion scheduled in 1 hour")
+            except (OSError, ValueError, RuntimeError) as exc:
+                delivery_errors.append(f"{chat_id}: {exc}")
+                log_execution(f"Telegram push failed; symbol={args.symbol.upper()}; target={chat_id}; error={exc}")
+        if delivery_errors:
+            raise RuntimeError("Delivery failed for: " + "; ".join(delivery_errors))
     except (OSError, ValueError, RuntimeError) as exc:
         log_execution(f"Scan or push failed; symbol={args.symbol.upper()}; error={exc}")
         print(str(exc), file=sys.stderr)
         return 1
 
-    print(f"Posted {args.symbol.upper()} scan to Telegram; scheduled deletion in 1 hour.")
+    print(f"Posted {args.symbol.upper()} scan to {len(chat_ids)} Telegram target(s); scheduled deletion in 1 hour.")
     return 0
 
 

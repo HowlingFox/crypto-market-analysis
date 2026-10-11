@@ -128,6 +128,24 @@ def closed_kline_rows(rows: List[Dict[str, float]]) -> List[Dict[str, float]]:
     return rows
 
 
+def engulfing_pattern(rows: List[Dict[str, float]]) -> Dict[str, Any]:
+    """Detect a strict real-body engulfing pattern on the last two closed candles."""
+    bars = closed_kline_rows(rows)
+    if len(bars) < 2:
+        return {"available": False, "pattern": None}
+    previous, current = bars[-2], bars[-1]
+    prev_bull = previous["close"] > previous["open"]
+    prev_bear = previous["close"] < previous["open"]
+    curr_bull = current["close"] > current["open"]
+    curr_bear = current["close"] < current["open"]
+    pattern = None
+    if prev_bull and curr_bear and current["open"] >= previous["close"] and current["close"] <= previous["open"]:
+        pattern = "阴包阳"
+    elif prev_bear and curr_bull and current["open"] <= previous["close"] and current["close"] >= previous["open"]:
+        pattern = "阳包阴"
+    return {"available": True, "pattern": pattern, "closed_candle_time": int(current["close_time"])}
+
+
 def rsi_value(closes: List[float], period: int) -> Number:
     if len(closes) <= period:
         return None
@@ -482,6 +500,7 @@ def analyze(bundle: Dict[str, Any]) -> Dict[str, Any]:
     parsed_klines = {period: parse_klines(get_data(resp)) for period, resp in bundle.get("klines", {}).items()}
     klines = {period: kline_metrics(rows) for period, rows in parsed_klines.items()}
     indicators = {period: technical_indicators(rows) for period, rows in parsed_klines.items()}
+    engulfing = {period: engulfing_pattern(parsed_klines.get(period, [])) for period in ("1d", "4h", "1h")}
     funding = funding_metrics(bundle)
     oi = oi_metrics(bundle)
     taker = taker_metrics(bundle)
@@ -521,6 +540,7 @@ def analyze(bundle: Dict[str, Any]) -> Dict[str, Any]:
         "resistance": resistance,
         "klines": klines,
         "indicators": indicators,
+        "engulfing": engulfing,
         "funding": funding,
         "open_interest": oi,
         "taker_flow": taker,
@@ -558,6 +578,7 @@ def render_markdown(result: Dict[str, Any]) -> str:
     taker = result["taker_flow"]
     h1 = result["klines"].get("1h", {})
     h4 = result["klines"].get("4h", {})
+    h1d = result["klines"].get("1d", {})
     meta = result.get("meta", {})
     data_source = meta.get("data_source") or "Binance public API"
     symbol = meta.get("symbol") or "BTC"
@@ -581,6 +602,10 @@ def render_markdown(result: Dict[str, Any]) -> str:
         "关键数据：",
         f"- 1h 量价：涨跌 {fmt_pct(h1.get('change_20_pct'))}，量能 {fmt_num(h1.get('volume_ratio'), 2)}x",
         f"- 4h 量价：涨跌 {fmt_pct(h4.get('change_20_pct'))}，量能 {fmt_num(h4.get('volume_ratio'), 2)}x",
+        f"- 日线量价：涨跌 {fmt_pct(h1d.get('change_20_pct'))}，量能 {fmt_num(h1d.get('volume_ratio'), 2)}x",
+        "",
+        "K线吞没形态（基于已收盘K线实体）：",
+        *[f"- {period}：{result['engulfing'].get(period, {}).get('pattern') or ('无吞没形态' if result['engulfing'].get(period, {}).get('available') else '数据不足')}" for period in ("1d", "4h", "1h")],
         f"- Taker buy/sell：15m {fmt_num(taker.get('by_period', {}).get('15m', {}).get('ratio'), 3)}，1h {fmt_num(taker.get('by_period', {}).get('1h', {}).get('ratio'), 3)}",
         f"- OI：当前 {fmt_num(oi.get('current_oi'), 3)}，1h变化 {fmt_pct((oi.get('history', {}).get('1h', {}) or {}).get('change_4'))}，4h变化 {fmt_pct((oi.get('history', {}).get('4h', {}) or {}).get('change_4'))}",
         f"- Funding：8h {fmt_pct(funding.get('current_8h_pct'), 4)}，APR {fmt_pct(funding.get('apr_pct'))}，Z {fmt_num(funding.get('z_recent'), 2)}，1天成本 {fmt_pct(funding.get('expected_1d_cost_pct'), 4)}，2天成本 {fmt_pct(funding.get('expected_2d_cost_pct'), 4)}",
@@ -588,7 +613,7 @@ def render_markdown(result: Dict[str, Any]) -> str:
         "",
         "技术指标（已收盘K线；超买超卖为提醒，不是反转确认）：",
     ]
-    for period in ("15m", "1h", "4h"):
+    for period in ("1d", "4h", "1h", "15m"):
         ind = result.get("indicators", {}).get(period, {})
         lines.append("")
         lines.append(period)
