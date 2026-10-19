@@ -87,9 +87,12 @@ def kline_metrics(rows: List[Dict[str, float]]) -> Dict[str, Any]:
     if len(rows) < 25:
         return {"available": False}
     latest = rows[-1]
-    prev20 = rows[-21:-1]
-    avg_volume = statistics.mean([r["volume"] for r in prev20]) if prev20 else None
-    volume_ratio = latest["volume"] / avg_volume if avg_volume else None
+    # Compare complete candles only. At a scan shortly after an interval opens,
+    # Binance's last row is still forming and its volume can be near zero.
+    completed = closed_kline_rows(rows)
+    volume_previous = completed[-21:-1]
+    avg_volume = statistics.mean([r["volume"] for r in volume_previous]) if len(volume_previous) == 20 else None
+    volume_ratio = completed[-1]["volume"] / avg_volume if avg_volume else None
     recent20 = rows[-21:-1]
     high20 = max(r["high"] for r in recent20)
     low20 = min(r["low"] for r in recent20)
@@ -600,9 +603,9 @@ def render_markdown(result: Dict[str, Any]) -> str:
     lines += [
         "",
         "关键数据：",
-        f"- 1h 量价：涨跌 {fmt_pct(h1.get('change_20_pct'))}，量能 {fmt_num(h1.get('volume_ratio'), 2)}x",
-        f"- 4h 量价：涨跌 {fmt_pct(h4.get('change_20_pct'))}，量能 {fmt_num(h4.get('volume_ratio'), 2)}x",
-        f"- 日线量价：涨跌 {fmt_pct(h1d.get('change_20_pct'))}，量能 {fmt_num(h1d.get('volume_ratio'), 2)}x",
+        f"- 1h 量价：涨跌 {fmt_pct(h1.get('change_20_pct'))}，已收盘K线量能 {fmt_num(h1.get('volume_ratio'), 2)}x",
+        f"- 4h 量价：涨跌 {fmt_pct(h4.get('change_20_pct'))}，已收盘K线量能 {fmt_num(h4.get('volume_ratio'), 2)}x",
+        f"- 日线量价：涨跌 {fmt_pct(h1d.get('change_20_pct'))}，已收盘K线量能 {fmt_num(h1d.get('volume_ratio'), 2)}x",
         "",
         "K线吞没形态（基于已收盘K线实体）：",
         *[f"- {period}：{result['engulfing'].get(period, {}).get('pattern') or ('无吞没形态' if result['engulfing'].get(period, {}).get('available') else '数据不足')}" for period in ("1d", "4h", "1h")],
